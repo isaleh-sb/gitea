@@ -5,8 +5,11 @@ package release
 
 import (
 	"context"
+	"crypto"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"code.gitea.io/gitea/models"
@@ -22,6 +25,12 @@ import (
 	"code.gitea.io/gitea/modules/timeutil"
 	"code.gitea.io/gitea/modules/util"
 	notify_service "code.gitea.io/gitea/services/notify"
+
+	kmsapi "chungus/saq/pqc/cryptoservice/proto/api/v1"
+	kmspb "chungus/saq/pqc/cryptoservice/proto/api/v1/kms"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func createTag(ctx context.Context, gitRepo *git.Repository, rel *repo_model.Release, msg string) (bool, error) {
@@ -122,6 +131,70 @@ func createTag(ctx context.Context, gitRepo *git.Repository, rel *repo_model.Rel
 		rel.CreatedUnix = timeutil.TimeStampNow()
 	}
 	return created, nil
+}
+
+type RemoteSigner struct {
+	crypto.Signer
+	client kmspb.CryptoKeyManagementServiceClient
+	pk     crypto.PublicKey
+	key    *kmsapi.CryptoKey
+}
+
+func (r *RemoteSigner) Public() crypto.PublicKey {
+	return r.pk
+}
+
+func (r *RemoteSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	signResp, err := r.client.Sign(context.Background(), &kmspb.SignReq{
+		Key:    r.key,
+		Digest: digest,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return signResp.Signed, nil
+}
+
+func RemoteSignRelease(gitRepo *git.Repository, key_alias string, attachmentUUIDs []string) (sigHash string, err error) {
+	hash, err := repo_model.GenAttachmentsHash(gitRepo.Ctx, attachmentUUIDs)
+	if err != nil {
+		return "hash_fail", err
+	}
+
+	conn, err := grpc.Dial("0.0.0.0:9876", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return "hash_fail", err
+	}
+	client := kmspb.NewCryptoKeyManagementServiceClient(conn)
+
+	listKeysResp, err := client.ListKeys(context.Background(), &kmspb.ListKeysReq{})
+	if err != nil {
+		return "hash_fail", err
+	}
+
+	var crypto_keyref *kmsapi.CryptoKey
+
+	for _, key := range listKeysResp.GetKeys() {
+		if key.Name == key_alias {
+			crypto_keyref = key
+			break
+		}
+	}
+
+	signResp, err := client.Sign(context.Background(), &kmspb.SignReq{
+		Key:    crypto_keyref,
+		Digest: []byte(hash),
+	})
+	if err != nil {
+		return "hash_fail", err
+	}
+
+	signedHash := signResp.Signed
+	signedHashHex := hex.EncodeToString(signedHash)
+
+	log.Info("Signed Hash: %s", signedHashHex)
+	return signedHashHex, nil
+
 }
 
 // CreateRelease creates a new release of repository.

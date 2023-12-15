@@ -6,8 +6,13 @@ package repo
 
 import (
 	"context"
+	"crypto"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,8 +23,13 @@ import (
 	"code.gitea.io/gitea/modules/structs"
 	"code.gitea.io/gitea/modules/timeutil"
 	"code.gitea.io/gitea/modules/util"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"xorm.io/builder"
+
+	kmsapi "chungus/saq/pqc/cryptoservice/proto/api/v1"
+	kmspb "chungus/saq/pqc/cryptoservice/proto/api/v1/kms"
 )
 
 // ErrReleaseAlreadyExist represents a "ReleaseAlreadyExist" kind of error.
@@ -82,8 +92,11 @@ type Release struct {
 	RenderedNote     string             `xorm:"-"`
 	IsDraft          bool               `xorm:"NOT NULL DEFAULT false"`
 	IsPrerelease     bool               `xorm:"NOT NULL DEFAULT false"`
+	SignRelease      bool               `xorm:"NOT NULL DEFAULT false"`
 	IsTag            bool               `xorm:"NOT NULL DEFAULT false"` // will be true only if the record is a tag and has no related releases
 	Attachments      []*Attachment      `xorm:"-"`
+	SigKeyAlias      string             `xorm:"TEXT"`
+	SigHash          string             `xorm:"TEXT"`
 	CreatedUnix      timeutil.TimeStamp `xorm:"INDEX"`
 }
 
@@ -178,6 +191,57 @@ func AddReleaseAttachments(ctx context.Context, releaseID int64, attachmentUUIDs
 	}
 
 	return err
+}
+
+func calculateHash(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	hashInBytes := hash.Sum(nil)
+	hashString := hex.EncodeToString(hashInBytes)
+
+	return hashString, nil
+}
+
+func combineHashes(hashes []string) string {
+	sort.Strings(hashes)
+	combinedHash := sha256.New()
+
+	for _, hash := range hashes {
+		combinedHash.Write([]byte(hash))
+	}
+
+	return hex.EncodeToString(combinedHash.Sum(nil))
+}
+
+// Generate sha of attachments
+func GenAttachmentsHash(ctx context.Context, attachmentUUIDs []string) (hash string, err error) {
+	attachments, err := GetAttachmentsByUUIDs(ctx, attachmentUUIDs)
+	if err != nil {
+		return "fail", fmt.Errorf("GetAttachmentsByUUIDs [uuids: %v]: %w", attachmentUUIDs, err)
+	}
+
+	var hashes []string
+
+	for _, attach := range attachments {
+		hash, err := calculateHash(attach.RelativePath())
+		if err != nil {
+			fmt.Printf("Error calculating hash for %s: %v\n", attach.RelativePath(), err)
+			return "fail", nil
+		}
+		hashes = append(hashes, hash)
+	}
+	combinedHash := combineHashes(hashes)
+	return combinedHash, nil
 }
 
 // GetRelease returns release by given ID.
@@ -296,6 +360,50 @@ func GetTagNamesByRepoID(ctx context.Context, repoID int64) ([]string, error) {
 		Cols("tag_name")
 
 	return tags, sess.Find(&tags)
+}
+
+type RemoteSigner struct {
+	crypto.Signer
+	client kmspb.CryptoKeyManagementServiceClient
+	pk     crypto.PublicKey
+	key    *kmsapi.CryptoKey
+}
+
+func (r *RemoteSigner) Public() crypto.PublicKey {
+	return r.pk
+}
+
+func (r *RemoteSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	signResp, err := r.client.Sign(context.Background(), &kmspb.SignReq{
+		Key:    r.key,
+		Digest: digest,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return signResp.Signed, nil
+}
+
+func GetSigningKeysList(ctx context.Context) ([]string, error) {
+	keys := make([]string, 0)
+
+	conn, err := grpc.Dial("0.0.0.0:9876", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+
+	client := kmspb.NewCryptoKeyManagementServiceClient(conn)
+
+	listKeysResp, err := client.ListKeys(context.Background(), &kmspb.ListKeysReq{})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, key := range listKeysResp.GetKeys() {
+		keys = append(keys, key.Name)
+	}
+
+	return keys, nil
 }
 
 // CountReleasesByRepoID returns a number of releases matching FindReleaseOptions and RepoID.

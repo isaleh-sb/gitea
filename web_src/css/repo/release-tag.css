@@ -91,6 +91,10 @@
   margin-bottom: 0;
 }
 
+.repository.new.release .signrelease.field {
+  margin-bottom: 0;
+}
+
 @media (max-width: 438px) {
   .repository.new.release .field button,
   .repository.new.release .field input {

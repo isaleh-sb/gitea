@@ -100,6 +100,32 @@
 						</div>
 					</div>
 					<span class="help">{{ctx.Locale.Tr "repo.release.prerelease_helper"}}</span>
+					<div class="signrelease field">
+						<div class="ui checkbox">
+							<input id="sign-release-checkbox" type="checkbox" name="signrelease" {{if .signrelease}}checked{{end}}>
+							<label><strong>{{ctx.Locale.Tr "repo.release.signrelease_desc"}}</strong></label>
+						</div>
+					</div>
+					<span class="help">{{ctx.Locale.Tr "repo.release.signrelease_helper"}}</span>
+					<div></div>
+					<div id="key-input-field" class="gt-dib gt-hidden">
+						<div class="ui seven wide key">
+							<label>{{ctx.Locale.Tr "repo.release.key_alias"}}</label>
+							<div class="ui selection dropdown">
+								<input type="hidden" name="key_target" value="{{.key_target}}">
+								{{svg "octicon-key"}}
+								<div class="text">
+									<strong id="repo-release-null-key">None</strong>
+								</div>
+								{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+								<div class="menu">
+									{{range .Keys}}
+										<div class="item" data-value="{{.}}">{{.}}</div>
+									{{end}}
+								</div>
+							</div>
+						</div>
+					</div>
 					<div class="divider gt-mt-0"></div>
 					<div class="gt-df gt-je">
 						{{if .PageIsEditRelease}}

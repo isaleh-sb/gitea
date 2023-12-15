@@ -370,6 +370,13 @@ func NewRelease(ctx *context.Context) {
 	}
 	ctx.Data["Tags"] = tags
 
+	keys, err := repo_model.GetSigningKeysList(ctx)
+	if err != nil {
+		ctx.ServerError("GetSigningKeysList", err)
+		return
+	}
+	ctx.Data["Keys"] = keys
+
 	ctx.HTML(http.StatusOK, tplReleaseNew)
 }
 
@@ -460,6 +467,9 @@ func NewReleasePost(ctx *context.Context) {
 			Note:         form.Content,
 			IsDraft:      len(form.Draft) > 0,
 			IsPrerelease: form.Prerelease,
+			SignRelease:  form.SignRelease,
+			SigKeyAlias:  form.SigKeyAlias,
+			SigHash:      "",
 			IsTag:        false,
 		}
 
@@ -489,6 +499,8 @@ func NewReleasePost(ctx *context.Context) {
 		rel.Target = form.Target
 		rel.IsDraft = len(form.Draft) > 0
 		rel.IsPrerelease = form.Prerelease
+		rel.SignRelease = form.SignRelease
+		rel.SigKeyAlias = form.SigKeyAlias
 		rel.PublisherID = ctx.Doer.ID
 		rel.IsTag = false
 
@@ -498,6 +510,23 @@ func NewReleasePost(ctx *context.Context) {
 			return
 		}
 	}
+
+	var signedHash string
+	if form.SignRelease {
+		signedHash, err = releaseservice.RemoteSignRelease(ctx.Repo.GitRepo, rel.SigKeyAlias, attachmentUUIDs)
+		if err != nil {
+			return
+		}
+		rel.SigHash = signedHash
+		if err = releaseservice.UpdateRelease(ctx, ctx.Doer, ctx.Repo.GitRepo, rel, attachmentUUIDs, nil, nil); err != nil {
+			ctx.Data["Err_TagName"] = true
+			ctx.ServerError("UpdateRelease", err)
+			return
+		}
+	}
+
+	log.Info("Release created: %s/%s:%s", ctx.Doer.LowerName, ctx.Repo.Repository.Name, form.TagName)
+
 	log.Trace("Release created: %s/%s:%s", ctx.Doer.LowerName, ctx.Repo.Repository.Name, form.TagName)
 
 	ctx.Redirect(ctx.Repo.RepoLink + "/releases")
