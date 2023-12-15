@@ -17,6 +17,7 @@ export function initRepoReleaseNew() {
 
   initTagNameEditor();
   initRepoReleaseEditor();
+  initKMSSignField();
 }
 
 function initTagNameEditor() {
@@ -43,6 +44,33 @@ function initTagNameEditor() {
     }
   });
 }
+
+function initKMSSignField() {
+  var checkbox = document.querySelector("input[name=signrelease]");
+
+  checkbox.addEventListener('change', function() {
+    if (this.checked) {
+      showElem('#key-input-field');
+    } else {
+      hideElem('#key-input-field');
+    }
+  });
+
+  // const el = document.getElementById('sign-release-checkbox');
+  // if (!el) return;
+
+  // document.getElementById('sign-release-checkbox').addEventListener('change', (e) => {
+  //   if (e.checked) {
+  //     showElem('#kms-key-alias');
+  //     showElem('#key-alias-helper');
+  //   } else {
+  //     hideElem('#kms-key-alias');
+  //     hideElem('#key-alias-helper');
+  //   }
+  // });
+}
+
+
 
 function initRepoReleaseEditor() {
   const $editor = $('.repository.new.release .combo-markdown-editor');
